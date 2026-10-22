@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-page: #f8fafc;        /* Fundo versão dia: cinza clarinho moderno */
+    --bg-card: #ffffff;        /* Caixas no modo dia: branco puro com leve contraste */
+    --bg-input: #f1f5f9;       /* Campos/Inputs dia: cinza bem claro */
+    --bg-input-focus: #ffffff;
+    --border-color: #e2e8f0;   /* Bordas elegantes */
+    --text-primary: #0f172a;   /* Texto principal escuro */
+    --text-muted: #64748b;     /* Texto secundário */
+  }
+
+  .dark {
+    --bg-page: #0c0d0e;        /* Fundo modo noite: cinza escuro sofisticado sem marrom */
+    --bg-card: #16181a;        /* Caixas no modo noite: cinza grafite elegante */
+    --bg-input: #202326;       /* Inputs modo noite: cinza um pouco mais claro */
+    --bg-input-focus: #262a2e;
+    --border-color: #272a2e;   /* Bordas suaves */
+    --text-primary: #f8fafc;   /* Texto branco/gelo */
+    --text-muted: #94a3b8;     /* Texto cinza claro */
+  }
+
+  * {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+  }
+
+  body {
+    background-color: var(--bg-page);
+    color: var(--text-primary);
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+}
+
+/* Helpers para uso direto de classes */
+.bg-app-bg {
+  background-color: var(--bg-page);
+}
+.bg-app-card {
+  background-color: var(--bg-card);
+}
+.bg-app-input {
+  background-color: var(--bg-input);
+}
+.border-app-border {
+  border-color: var(--border-color);
+}
+.text-app-text {
+  color: var(--text-primary);
+}
+.text-app-muted {
+  color: var(--text-muted);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #272a2e;
+}
