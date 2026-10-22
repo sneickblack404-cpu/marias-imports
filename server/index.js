@@ -192,7 +192,7 @@ app.post('/api/login', (req, res) => {
 
     if (!matchedUser || String(matchedUser.password) !== cleanPass) {
       return res.status(401).json({
-        error: 'Usuário ou senha inválidos. Utilize Usuário: Núbia e Senha: 1234',
+        error: 'Usuário ou senha incorretos.',
       });
     }
 
