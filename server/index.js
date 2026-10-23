@@ -15,6 +15,19 @@ const PORT = process.env.PORT || 3005;
 app.use(cors());
 app.use(express.json());
 
+// Ensure all tables exist on startup (auto-migration for cloud deploy)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS expenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    description TEXT NOT NULL,
+    amount REAL NOT NULL,
+    expense_date TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'Geral',
+    notes TEXT DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+  );
+`);
+
 function normalizeText(str) {
   return String(str || '')
     .trim()

@@ -159,6 +159,16 @@ function initDb() {
       FOREIGN KEY (installment_id) REFERENCES installments(id) ON DELETE SET NULL,
       FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL
     );
+
+    CREATE TABLE IF NOT EXISTS expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      description TEXT NOT NULL,
+      amount REAL NOT NULL,
+      expense_date TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'Geral',
+      notes TEXT DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    );
   `);
 
   const userCount = db.prepare('SELECT COUNT(*) as total FROM users').get();
