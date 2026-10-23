@@ -79,6 +79,7 @@ function initDb() {
       default_discount_percent REAL NOT NULL DEFAULT 0,
       credit_limit REAL NOT NULL DEFAULT 2000,
       notes TEXT DEFAULT '',
+      active INTEGER DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
 
@@ -170,6 +171,22 @@ function initDb() {
       created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
   `);
+
+  function safeAddColumn(tableName, columnName, columnDef) {
+    try {
+      const tableInfo = db.prepare(`PRAGMA table_info(${tableName})`).all();
+      const exists = tableInfo.some((c) => c.name === columnName);
+      if (!exists) {
+        db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDef};`);
+      }
+    } catch (_err) {
+      // ignore
+    }
+  }
+
+  safeAddColumn('clients', 'active', 'INTEGER DEFAULT 1');
+  safeAddColumn('products', 'active', 'INTEGER DEFAULT 1');
+  safeAddColumn('users', 'active', 'INTEGER DEFAULT 1');
 
   const userCount = db.prepare('SELECT COUNT(*) as total FROM users').get();
   if (userCount.total === 0) {

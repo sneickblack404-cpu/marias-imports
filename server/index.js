@@ -15,7 +15,7 @@ const PORT = process.env.PORT || 3005;
 app.use(cors());
 app.use(express.json());
 
-// Ensure all tables exist on startup (auto-migration for cloud deploy)
+// Ensure all tables and columns exist on startup (auto-migration for cloud deploy)
 db.exec(`
   CREATE TABLE IF NOT EXISTS expenses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,6 +27,20 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
   );
 `);
+
+function safeAddCol(tbl, col, def) {
+  try {
+    const cols = db.prepare(`PRAGMA table_info(${tbl})`).all();
+    if (!cols.some((c) => c.name === col)) {
+      db.exec(`ALTER TABLE ${tbl} ADD COLUMN ${col} ${def};`);
+    }
+  } catch (_e) {
+    // ignore
+  }
+}
+safeAddCol('clients', 'active', 'INTEGER DEFAULT 1');
+safeAddCol('products', 'active', 'INTEGER DEFAULT 1');
+safeAddCol('users', 'active', 'INTEGER DEFAULT 1');
 
 function normalizeText(str) {
   return String(str || '')
