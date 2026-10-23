@@ -1028,6 +1028,11 @@ app.delete('/api/expenses/:id', (req, res) => {
   }
 });
 
+// Health check for Render and monitoring keep-alive
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+});
+
 // Serve static frontend in production
 const distPath = path.join(__dirname, '..', 'dist');
 app.use(express.static(distPath));
@@ -1038,6 +1043,6 @@ app.get('/{*splat}', (req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`[Nubia Arruda API] Servidor rodando na porta ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[Maria's Imports API] Servidor rodando na porta ${PORT}`);
 });
