@@ -42,6 +42,42 @@ safeAddCol('clients', 'active', 'INTEGER DEFAULT 1');
 safeAddCol('products', 'active', 'INTEGER DEFAULT 1');
 safeAddCol('users', 'active', 'INTEGER DEFAULT 1');
 
+// Purge any legacy demo data on startup
+try {
+  const demoClients = [
+    'Maria Fernanda Oliveira',
+    'Camila Santos Rocha',
+    'Juliana Costa Mendes',
+    'Patrícia Lima Almeida',
+  ];
+  for (const name of demoClients) {
+    const cli = db.prepare('SELECT id FROM clients WHERE name = ?').get(name);
+    if (cli) {
+      db.prepare('DELETE FROM payments WHERE client_id = ?').run(cli.id);
+      db.prepare('DELETE FROM installments WHERE client_id = ?').run(cli.id);
+      db.prepare('DELETE FROM sale_items WHERE sale_id IN (SELECT id FROM sales WHERE client_id = ?)').run(cli.id);
+      db.prepare('DELETE FROM sales WHERE client_id = ?').run(cli.id);
+      db.prepare('DELETE FROM clients WHERE id = ?').run(cli.id);
+    }
+  }
+
+  db.prepare(`
+    DELETE FROM products WHERE sku IN (
+      'PRD-001', 'PRD-002', 'PRD-003', 'PRD-004',
+      'PRD-005', 'PRD-006', 'PRD-007', 'PRD-008'
+    )
+  `).run();
+
+  db.prepare(`
+    DELETE FROM sales WHERE client_name_snapshot IN (
+      'Maria Fernanda Oliveira', 'Camila Santos Rocha',
+      'Juliana Costa Mendes', 'Patrícia Lima Almeida'
+    )
+  `).run();
+} catch (_e) {
+  // ignore
+}
+
 function normalizeText(str) {
   return String(str || '')
     .trim()
@@ -1049,6 +1085,22 @@ app.delete('/api/expenses/:id', (req, res) => {
   try {
     const id = Number(req.params.id);
     db.prepare('DELETE FROM expenses WHERE id = ?').run(id);
+    res.json(getFullDataPayload());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin endpoint to reset all test/demo data cleanly
+app.post('/api/admin/clean-all', (req, res) => {
+  try {
+    db.prepare('DELETE FROM payments').run();
+    db.prepare('DELETE FROM installments').run();
+    db.prepare('DELETE FROM sale_items').run();
+    db.prepare('DELETE FROM sales').run();
+    db.prepare('DELETE FROM products').run();
+    db.prepare('DELETE FROM clients').run();
+    db.prepare('DELETE FROM expenses').run();
     res.json(getFullDataPayload());
   } catch (err) {
     res.status(500).json({ error: err.message });
