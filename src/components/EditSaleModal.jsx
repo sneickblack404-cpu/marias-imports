@@ -132,6 +132,28 @@ export default function EditSaleModal({
     );
   };
 
+  const handleUpdateItemName = (tempId, newName) => {
+    setItems((prev) =>
+      prev.map((it) => (it.tempId === tempId ? { ...it, product_name: newName } : it))
+    );
+  };
+
+  const handleAddNewBlankItem = () => {
+    setItems((prev) => [
+      ...prev,
+      {
+        tempId: `manual-${Date.now()}`,
+        product_id: null,
+        product_sku_snapshot: 'MANUAL',
+        product_name: '',
+        is_manual_item: true,
+        quantity: 1,
+        catalog_unit_price: 0,
+        sold_unit_price: 0,
+      },
+    ]);
+  };
+
   const handleRemoveItem = (tempId) => {
     if (items.length === 1) {
       if (!confirm('A venda ficará sem nenhum item. Deseja remover mesmo assim?')) return;
@@ -325,20 +347,32 @@ export default function EditSaleModal({
 
           {/* Peças / Itens da Venda */}
           <div className="space-y-2 border border-app-border rounded-2xl p-3 bg-app-input/20">
-            <div className="flex justify-between items-center">
+            <div className="flex flex-wrap justify-between items-center gap-2">
               <span className="font-semibold text-app-text flex items-center gap-1.5">
                 <Package className="w-3.5 h-3.5 text-app-muted" />
                 Itens Comprados ({items.length})
               </span>
 
-              <button
-                type="button"
-                onClick={() => setShowAddMenu(!showAddMenu)}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 font-medium text-[11px] cursor-pointer hover:opacity-90 transition"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Adicionar Peça</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleAddNewBlankItem}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-app-border bg-app-card hover:bg-app-input text-app-text font-medium text-[11px] cursor-pointer transition shadow-2xs"
+                  title="Inserir uma nova linha de produto para digitar nome e preço"
+                >
+                  <Plus className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>+ Digitar Peça</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowAddMenu(!showAddMenu)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 font-medium text-[11px] cursor-pointer hover:opacity-90 transition"
+                >
+                  <Search className="w-3.5 h-3.5" />
+                  <span>Do Estoque</span>
+                </button>
+              </div>
             </div>
 
             {/* Menu Dropdown de Adição */}
@@ -444,10 +478,18 @@ export default function EditSaleModal({
                       key={it.tempId}
                       className="p-2.5 rounded-xl border border-app-border bg-app-card flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
                     >
-                      <div className="flex-1">
-                        <span className="font-medium text-app-text block">{it.product_name}</span>
+                      <div className="flex-1 min-w-[170px]">
+                        <input
+                          type="text"
+                          value={it.product_name}
+                          onChange={(e) => handleUpdateItemName(it.tempId, e.target.value)}
+                          placeholder="Nome da peça ou produto..."
+                          className="w-full bg-app-input border border-app-border rounded-xl px-2.5 py-1.5 text-xs text-app-text font-medium outline-none focus:border-stone-400"
+                        />
                         {it.product_sku_snapshot && it.product_sku_snapshot !== 'MANUAL' && (
-                          <span className="text-[10px] text-app-muted">SKU: {it.product_sku_snapshot}</span>
+                          <span className="text-[10px] text-app-muted block mt-0.5 ml-1">
+                            SKU: {it.product_sku_snapshot}
+                          </span>
                         )}
                       </div>
 

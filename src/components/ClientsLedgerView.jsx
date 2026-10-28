@@ -53,6 +53,7 @@ export default function ClientsLedgerView({
   const [editingSale, setEditingSale] = useState(null);
   const [deletingSaleId, setDeletingSaleId] = useState(null);
   const [itemSearch, setItemSearch] = useState('');
+  const [itemsViewMode, setItemsViewMode] = useState('PRODUCTS'); // 'PRODUCTS' (agrupado) ou 'ORDERS' (detalhado)
 
   const selectedClient =
     clients.find((c) => c.id === Number(selectedClientId)) || clients[0] || null;
@@ -211,6 +212,46 @@ export default function ClientsLedgerView({
         (it.product_sku_snapshot || '').toLowerCase().includes(q)
     );
   }, [allClientItems, itemSearch]);
+
+  // Agrupamento consolidado por Peça / Produto (soma todas as compras do mesmo item)
+  const groupedClientItems = useMemo(() => {
+    if (!allClientItems.length) return [];
+    const map = new Map();
+    for (const it of allClientItems) {
+      const cleanName = (it.product_name || 'Item Variado').trim();
+      const key = cleanName.toLowerCase();
+      if (!map.has(key)) {
+        map.set(key, {
+          product_name: cleanName,
+          product_sku_snapshot: it.product_sku_snapshot,
+          total_quantity: 0,
+          total_amount: 0,
+          orders: new Set(),
+          last_date: it.sale_date,
+        });
+      }
+      const entry = map.get(key);
+      entry.total_quantity += Number(it.quantity) || 1;
+      entry.total_amount += Number(it.line_final_total) || 0;
+      if (it.sale_code) entry.orders.add(it.sale_code);
+      if (it.sale_date && it.sale_date > entry.last_date) {
+        entry.last_date = it.sale_date;
+      }
+    }
+
+    return Array.from(map.values()).sort(
+      (a, b) => b.total_quantity - a.total_quantity || b.last_date.localeCompare(a.last_date)
+    );
+  }, [allClientItems]);
+
+  const filteredGroupedItems = useMemo(() => {
+    if (!itemSearch.trim()) return groupedClientItems;
+    const q = itemSearch.toLowerCase();
+    return groupedClientItems.filter((it) =>
+      it.product_name.toLowerCase().includes(q) ||
+      Array.from(it.orders).some((o) => o.toLowerCase().includes(q))
+    );
+  }, [groupedClientItems, itemSearch]);
 
   const totalPiecesCount = useMemo(() => {
     return allClientItems.reduce((acc, it) => acc + (Number(it.quantity) || 0), 0);
@@ -531,24 +572,26 @@ export default function ClientsLedgerView({
                 </div>
               </div>
 
-              {/* Todas as Peças Compradas (Extrato Geral de Peças Consolidado) */}
+              {/* Listagem de Peças e Produtos Comprados */}
               <div className="bg-app-card rounded-2xl p-4 border border-app-border shadow-xs space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-app-border pb-2.5">
                   <div>
                     <div className="flex items-center gap-2">
                       <Package className="w-4 h-4 text-app-text" />
                       <span className="text-xs font-semibold text-app-text">
-                        Todas as Peças Compradas ({allClientItems.length})
+                        Itens & Peças Compradas
                       </span>
                     </div>
                     <p className="text-[11px] text-app-muted mt-0.5">
-                      Extrato consolidado de pedidos (mais recentes no topo, antigos abaixo)
+                      {itemsViewMode === 'PRODUCTS'
+                        ? 'Listagem consolidada por peça com a quantidade total de todas as compras'
+                        : 'Extrato detalhado por pedido (mais recentes no topo)'}
                     </p>
                   </div>
 
                   <div className="flex items-center gap-2 text-xs flex-wrap">
                     <span className="px-2 py-0.5 rounded-lg bg-app-input border border-app-border text-app-text text-[11px]">
-                      <strong>{totalPiecesCount}</strong> {totalPiecesCount === 1 ? 'peça' : 'peças'}
+                      <strong>{totalPiecesCount}</strong> {totalPiecesCount === 1 ? 'peça total' : 'peças totais'}
                     </span>
                     <span className="px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold border border-emerald-500/20 text-[11px]">
                       Total: {formatCurrency(totalPiecesAmount)}
@@ -556,68 +599,164 @@ export default function ClientsLedgerView({
                   </div>
                 </div>
 
-                {allClientItems.length > 3 && (
-                  <div className="relative">
-                    <Search className="w-3 h-3 absolute left-2.5 top-1/2 -translate-y-1/2 text-app-muted" />
-                    <input
-                      type="text"
-                      placeholder="Filtrar peça comprada por esta cliente..."
-                      value={itemSearch}
-                      onChange={(e) => setItemSearch(e.target.value)}
-                      className="w-full bg-app-input border border-app-border rounded-xl pl-7 pr-3 py-1 text-xs text-app-text outline-none focus:border-stone-400"
-                    />
+                {/* Abas de Visualização (Agrupado por Produto vs Por Pedido) */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="inline-flex p-1 rounded-xl bg-app-input border border-app-border text-xs gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setItemsViewMode('PRODUCTS')}
+                      className={`px-3 py-1 rounded-lg font-medium transition cursor-pointer text-[11px] ${
+                        itemsViewMode === 'PRODUCTS'
+                          ? 'bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 shadow-xs'
+                          : 'text-app-muted hover:text-app-text'
+                      }`}
+                    >
+                      Por Peça / Produto ({groupedClientItems.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setItemsViewMode('ORDERS')}
+                      className={`px-3 py-1 rounded-lg font-medium transition cursor-pointer text-[11px] ${
+                        itemsViewMode === 'ORDERS'
+                          ? 'bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 shadow-xs'
+                          : 'text-app-muted hover:text-app-text'
+                      }`}
+                    >
+                      Por Pedido Detalhado ({allClientItems.length})
+                    </button>
+                  </div>
+
+                  {(allClientItems.length > 3 || groupedClientItems.length > 3) && (
+                    <div className="relative flex-1 sm:max-w-xs">
+                      <Search className="w-3 h-3 absolute left-2.5 top-1/2 -translate-y-1/2 text-app-muted" />
+                      <input
+                        type="text"
+                        placeholder="Filtrar por nome da peça ou pedido..."
+                        value={itemSearch}
+                        onChange={(e) => setItemSearch(e.target.value)}
+                        className="w-full bg-app-input border border-app-border rounded-xl pl-7 pr-3 py-1 text-xs text-app-text outline-none focus:border-stone-400"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Conteúdo: Modo Agrupado por Peça / Produto */}
+                {itemsViewMode === 'PRODUCTS' && (
+                  <div>
+                    {filteredGroupedItems.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-app-muted">
+                        Nenhuma peça encontrada no histórico desta cliente.
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs text-app-text">
+                          <thead>
+                            <tr className="border-b border-app-border text-[11px] text-app-muted font-medium">
+                              <th className="pb-1.5 font-medium">Peça / Produto</th>
+                              <th className="pb-1.5 font-medium text-center">Qtd Comprada</th>
+                              <th className="pb-1.5 font-medium text-right">Preço Médio</th>
+                              <th className="pb-1.5 font-medium text-right">Total Acumulado</th>
+                              <th className="pb-1.5 font-medium text-center">Pedidos</th>
+                              <th className="pb-1.5 font-medium text-right">Última Compra</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-app-border/50">
+                            {filteredGroupedItems.map((grp, idx) => (
+                              <tr key={`grp-${grp.product_name}-${idx}`} className="hover:bg-app-input/40 transition">
+                                <td className="py-2.5 font-medium">
+                                  <div className="flex flex-col">
+                                    <span className="text-app-text font-semibold">{grp.product_name}</span>
+                                    {grp.product_sku_snapshot && grp.product_sku_snapshot !== 'MANUAL' && (
+                                      <span className="text-[10px] text-app-muted">SKU: {grp.product_sku_snapshot}</span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="py-2.5 text-center">
+                                  <span className="px-2 py-0.5 rounded-md bg-stone-900/10 dark:bg-stone-100/10 text-app-text font-bold text-xs border border-app-border">
+                                    {grp.total_quantity}x
+                                  </span>
+                                </td>
+                                <td className="py-2.5 text-right text-app-muted">
+                                  {formatCurrency(grp.total_amount / (grp.total_quantity || 1))}
+                                </td>
+                                <td className="py-2.5 text-right font-semibold text-app-text">
+                                  {formatCurrency(grp.total_amount)}
+                                </td>
+                                <td className="py-2.5 text-center">
+                                  <div className="flex flex-wrap justify-center gap-1">
+                                    {Array.from(grp.orders).map((oc) => (
+                                      <span key={oc} className="px-1.5 py-0.5 rounded bg-app-input border border-app-border text-[10px] text-app-muted">
+                                        {oc}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </td>
+                                <td className="py-2.5 text-right text-[11px] text-app-muted whitespace-nowrap">
+                                  {formatDateBR(grp.last_date)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {filteredClientItems.length === 0 ? (
-                  <div className="p-4 text-center text-xs text-app-muted">
-                    Nenhuma peça encontrada no histórico.
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs text-app-text">
-                      <thead>
-                        <tr className="border-b border-app-border text-[11px] text-app-muted font-medium">
-                          <th className="pb-1.5 font-medium">Data</th>
-                          <th className="pb-1.5 font-medium">Pedido</th>
-                          <th className="pb-1.5 font-medium">Peça / Produto</th>
-                          <th className="pb-1.5 font-medium text-center">Qtd</th>
-                          <th className="pb-1.5 font-medium text-right">Unitário</th>
-                          <th className="pb-1.5 font-medium text-right">Total</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-app-border/50">
-                        {filteredClientItems.map((it, idx) => (
-                          <tr key={`${it.sale_id}-${it.id || idx}`} className="hover:bg-app-input/40 transition">
-                            <td className="py-2 text-[11px] text-app-muted whitespace-nowrap">
-                              {formatDateBR(it.sale_date)}
-                            </td>
-                            <td className="py-2 font-medium whitespace-nowrap">
-                              <span className="px-1.5 py-0.5 rounded bg-app-input border border-app-border text-[10px]">
-                                {it.sale_code}
-                              </span>
-                            </td>
-                            <td className="py-2 font-medium">
-                              <div className="flex flex-col">
-                                <span>{it.product_name}</span>
-                                {it.product_sku_snapshot && it.product_sku_snapshot !== 'MANUAL' && (
-                                  <span className="text-[10px] text-app-muted">SKU: {it.product_sku_snapshot}</span>
-                                )}
-                              </div>
-                            </td>
-                            <td className="py-2 text-center font-semibold text-[11px]">
-                              {it.quantity}x
-                            </td>
-                            <td className="py-2 text-right text-app-muted text-[11px]">
-                              {formatCurrency(it.sold_unit_price)}
-                            </td>
-                            <td className="py-2 text-right font-semibold text-[11px]">
-                              {formatCurrency(it.line_final_total)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                {/* Conteúdo: Modo Extrato Detalhado por Pedido */}
+                {itemsViewMode === 'ORDERS' && (
+                  <div>
+                    {filteredClientItems.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-app-muted">
+                        Nenhuma peça encontrada no histórico.
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs text-app-text">
+                          <thead>
+                            <tr className="border-b border-app-border text-[11px] text-app-muted font-medium">
+                              <th className="pb-1.5 font-medium">Data</th>
+                              <th className="pb-1.5 font-medium">Pedido</th>
+                              <th className="pb-1.5 font-medium">Peça / Produto</th>
+                              <th className="pb-1.5 font-medium text-center">Qtd</th>
+                              <th className="pb-1.5 font-medium text-right">Unitário</th>
+                              <th className="pb-1.5 font-medium text-right">Total</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-app-border/50">
+                            {filteredClientItems.map((it, idx) => (
+                              <tr key={`${it.sale_id}-${it.id || idx}`} className="hover:bg-app-input/40 transition">
+                                <td className="py-2 text-[11px] text-app-muted whitespace-nowrap">
+                                  {formatDateBR(it.sale_date)}
+                                </td>
+                                <td className="py-2 font-medium whitespace-nowrap">
+                                  <span className="px-1.5 py-0.5 rounded bg-app-input border border-app-border text-[10px]">
+                                    {it.sale_code}
+                                  </span>
+                                </td>
+                                <td className="py-2 font-medium">
+                                  <div className="flex flex-col">
+                                    <span>{it.product_name}</span>
+                                    {it.product_sku_snapshot && it.product_sku_snapshot !== 'MANUAL' && (
+                                      <span className="text-[10px] text-app-muted">SKU: {it.product_sku_snapshot}</span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="py-2 text-center font-semibold text-[11px]">
+                                  {it.quantity}x
+                                </td>
+                                <td className="py-2 text-right text-app-muted text-[11px]">
+                                  {formatCurrency(it.sold_unit_price)}
+                                </td>
+                                <td className="py-2 text-right font-semibold text-[11px]">
+                                  {formatCurrency(it.line_final_total)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

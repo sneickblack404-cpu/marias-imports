@@ -1398,6 +1398,183 @@ app.post('/api/admin/clean-all', (req, res) => {
   }
 });
 
+// Backup & Restore
+app.get('/api/backup/export', (req, res) => {
+  try {
+    const clients = db.prepare('SELECT * FROM clients').all();
+    const products = db.prepare('SELECT * FROM products').all();
+    const sales = db.prepare('SELECT * FROM sales').all();
+    const sale_items = db.prepare('SELECT * FROM sale_items').all();
+    const installments = db.prepare('SELECT * FROM installments').all();
+    const payments = db.prepare('SELECT * FROM payments').all();
+    const expenses = db.prepare('SELECT * FROM expenses').all();
+    const settings = db.prepare('SELECT * FROM settings').all();
+
+    res.json({
+      exported_at: new Date().toISOString(),
+      app: "Maria's Imports",
+      version: '1.0',
+      data: {
+        clients,
+        products,
+        sales,
+        sale_items,
+        installments,
+        payments,
+        expenses,
+        settings,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/backup/restore', (req, res) => {
+  try {
+    const backupData = req.body?.data || req.body;
+    if (!backupData || (!backupData.clients && !backupData.products)) {
+      return res.status(400).json({ error: 'Formato de backup inválido.' });
+    }
+
+    db.exec('PRAGMA foreign_keys = OFF;');
+    db.exec('BEGIN');
+    try {
+      if (Array.isArray(backupData.clients)) {
+        db.prepare('DELETE FROM clients').run();
+        const insCli = db.prepare(`
+          INSERT INTO clients (id, name, phone, cpf, address, neighborhood, city, default_discount_percent, credit_limit, notes, active)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const c of backupData.clients) {
+          insCli.run(
+            c.id, c.name, c.phone || '', c.cpf || '', c.address || '',
+            c.neighborhood || '', c.city || '', c.default_discount_percent || 0,
+            c.credit_limit || 2000, c.notes || '', c.active ?? 1
+          );
+        }
+      }
+
+      if (Array.isArray(backupData.products)) {
+        db.prepare('DELETE FROM products').run();
+        const insProd = db.prepare(`
+          INSERT INTO products (id, sku, name, category, cost_price, sale_price, stock_qty, min_stock_qty, unit, notes, active)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const p of backupData.products) {
+          insProd.run(
+            p.id, p.sku || `PRD-${p.id}`, p.name, p.category || 'Geral',
+            p.cost_price || 0, p.sale_price || 0, p.stock_qty || 0,
+            p.min_stock_qty || 1, p.unit || 'UN', p.notes || '', p.active ?? 1
+          );
+        }
+      }
+
+      if (Array.isArray(backupData.sales)) {
+        db.prepare('DELETE FROM sales').run();
+        const insSale = db.prepare(`
+          INSERT INTO sales (
+            id, sale_code, client_id, client_name_snapshot, sale_date, payment_method, payment_submethod,
+            installments_count, interval_days, first_due_date, original_subtotal, item_discounts_total,
+            sale_discount_type, sale_discount_input, sale_discount_amount, total_discount_amount,
+            final_total, paid_total, pending_total, status, notes, created_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const s of backupData.sales) {
+          insSale.run(
+            s.id, s.sale_code, s.client_id, s.client_name_snapshot, s.sale_date,
+            s.payment_method, s.payment_submethod, s.installments_count || 1,
+            s.interval_days || 30, s.first_due_date, s.original_subtotal || s.final_total,
+            s.item_discounts_total || 0, s.sale_discount_type || 'VALUE',
+            s.sale_discount_input || 0, s.sale_discount_amount || 0,
+            s.total_discount_amount || 0, s.final_total, s.paid_total || 0,
+            s.pending_total || 0, s.status || 'PENDENTE', s.notes || '',
+            s.created_by || 'Núbia'
+          );
+        }
+      }
+
+      if (Array.isArray(backupData.sale_items)) {
+        db.prepare('DELETE FROM sale_items').run();
+        const insItem = db.prepare(`
+          INSERT INTO sale_items (
+            id, sale_id, product_id, product_sku_snapshot, product_name, is_manual_item,
+            quantity, catalog_unit_price, sold_unit_price, item_discount_unit, item_discount_total,
+            line_original_total, line_final_total
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const it of backupData.sale_items) {
+          insItem.run(
+            it.id, it.sale_id, it.product_id, it.product_sku_snapshot || 'MANUAL',
+            it.product_name, it.is_manual_item ? 1 : 0, it.quantity || 1,
+            it.catalog_unit_price || it.sold_unit_price, it.sold_unit_price,
+            it.item_discount_unit || 0, it.item_discount_total || 0,
+            it.line_original_total || (it.sold_unit_price * (it.quantity || 1)),
+            it.line_final_total || (it.sold_unit_price * (it.quantity || 1))
+          );
+        }
+      }
+
+      if (Array.isArray(backupData.installments)) {
+        db.prepare('DELETE FROM installments').run();
+        const insInst = db.prepare(`
+          INSERT INTO installments (
+            id, sale_id, client_id, installment_number, total_installments, due_date,
+            amount, paid_amount, remaining_amount, status, paid_at, notes
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const inst of backupData.installments) {
+          insInst.run(
+            inst.id, inst.sale_id, inst.client_id, inst.installment_number || 1,
+            inst.total_installments || 1, inst.due_date, inst.amount,
+            inst.paid_amount || 0, inst.remaining_amount || inst.amount,
+            inst.status || 'PENDENTE', inst.paid_at || null, inst.notes || ''
+          );
+        }
+      }
+
+      if (Array.isArray(backupData.payments)) {
+        db.prepare('DELETE FROM payments').run();
+        const insPay = db.prepare(`
+          INSERT INTO payments (
+            id, sale_id, installment_id, client_id, amount, payment_date, payment_type, notes, received_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const p of backupData.payments) {
+          insPay.run(
+            p.id, p.sale_id, p.installment_id, p.client_id, p.amount,
+            p.payment_date, p.payment_type || 'PIX', p.notes || '', p.received_by || 'Núbia'
+          );
+        }
+      }
+
+      if (Array.isArray(backupData.expenses)) {
+        db.prepare('DELETE FROM expenses').run();
+        const insExp = db.prepare(`
+          INSERT INTO expenses (id, description, category, amount, expense_date, notes)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `);
+        for (const exp of backupData.expenses) {
+          insExp.run(
+            exp.id, exp.description, exp.category || 'Geral', exp.amount,
+            exp.expense_date, exp.notes || ''
+          );
+        }
+      }
+
+      db.exec('COMMIT');
+      db.exec('PRAGMA foreign_keys = ON;');
+      res.json(getFullDataPayload());
+    } catch (innerErr) {
+      db.exec('ROLLBACK');
+      db.exec('PRAGMA foreign_keys = ON;');
+      throw innerErr;
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Health check for Render and monitoring keep-alive
 app.get('/health', (req, res) => {
   res.status(200).send('OK');

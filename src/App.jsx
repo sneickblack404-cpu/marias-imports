@@ -12,6 +12,7 @@ import {
   Sun,
   Moon,
   Trash2,
+  ShieldCheck,
 } from 'lucide-react';
 import LoginScreen from './components/LoginScreen';
 import PosSaleView from './components/PosSaleView';
@@ -20,6 +21,7 @@ import ClientsLedgerView from './components/ClientsLedgerView';
 import ReceivablesView from './components/ReceivablesView';
 import ProfitReportView from './components/ProfitReportView';
 import NubiaLogo from './components/NubiaLogo';
+import BackupModal from './components/BackupModal';
 import { formatCurrency, formatDateBR, getInstallmentDueInfo } from './utils';
 
 export default function App() {
@@ -50,6 +52,8 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [preselectedClientId, setPreselectedClientId] = useState(null);
+  const [showBackupModal, setShowBackupModal] = useState(false);
+  const [restoreBanner, setRestoreBanner] = useState(null);
 
   const [data, setData] = useState({
     today: new Date().toISOString().slice(0, 10),
@@ -65,6 +69,11 @@ export default function App() {
   const fetchBootstrap = useCallback(async (directPayload = null) => {
     if (directPayload && directPayload.products && directPayload.clients) {
       setData(directPayload);
+      try {
+        if (directPayload.clients.length > 0 || directPayload.products.length > 0) {
+          localStorage.setItem('marias_imports_data_backup', JSON.stringify(directPayload));
+        }
+      } catch (e) {}
       setLoading(false);
       return;
     }
@@ -73,6 +82,21 @@ export default function App() {
       if (res.ok) {
         const json = await res.json();
         setData(json);
+
+        // Se o servidor voltou zerado mas temos cópia no navegador:
+        if ((!json.clients || json.clients.length === 0) && (!json.products || json.products.length === 0)) {
+          try {
+            const savedStr = localStorage.getItem('marias_imports_data_backup');
+            if (savedStr) {
+              const saved = JSON.parse(savedStr);
+              if (saved && (saved.clients?.length > 0 || saved.products?.length > 0)) {
+                setRestoreBanner(saved);
+              }
+            }
+          } catch (e) {}
+        } else if (json.clients?.length > 0 || json.products?.length > 0) {
+          localStorage.setItem('marias_imports_data_backup', JSON.stringify(json));
+        }
       }
     } catch (err) {
       console.error(err);
@@ -220,6 +244,15 @@ export default function App() {
             </button>
 
             <button
+              onClick={() => setShowBackupModal(true)}
+              className="p-2 rounded-xl text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 border border-emerald-500/20 cursor-pointer transition flex items-center gap-1 text-xs font-medium"
+              title="Backup & Segurança dos Dados"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              <span className="hidden sm:inline">Backup</span>
+            </button>
+
+            <button
               onClick={() => fetchBootstrap()}
               className="p-2 rounded-xl text-app-muted hover:text-app-text hover:bg-app-input cursor-pointer"
               title="Atualizar dados"
@@ -261,6 +294,49 @@ export default function App() {
 
       {/* Conteúdo Central */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6">
+        {restoreBanner && (
+          <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs mb-5">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-5 h-5 shrink-0 text-amber-500" />
+              <span>
+                <strong>Cópia de Segurança Encontrada:</strong> Temos uma cópia salva no seu navegador com{' '}
+                <strong>{restoreBanner.clients?.length || 0} clientes</strong> e{' '}
+                <strong>{restoreBanner.products?.length || 0} produtos</strong>.
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const res = await fetch('/api/backup/restore', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(restoreBanner),
+                    });
+                    if (res.ok) {
+                      const updated = await res.json();
+                      setData(updated);
+                      setRestoreBanner(null);
+                    }
+                  } catch (e) {
+                    alert('Erro ao restaurar backup.');
+                  }
+                }}
+                className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold transition cursor-pointer shadow-xs"
+              >
+                Restaurar Agora
+              </button>
+              <button
+                type="button"
+                onClick={() => setRestoreBanner(null)}
+                className="px-2 py-1.5 text-app-muted hover:text-app-text cursor-pointer"
+              >
+                Dispensar
+              </button>
+            </div>
+          </div>
+        )}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
             {/* Header de Ação Direta */}
@@ -466,6 +542,17 @@ export default function App() {
           />
         )}
       </main>
+
+      {showBackupModal && (
+        <BackupModal
+          currentData={data}
+          onClose={() => setShowBackupModal(false)}
+          onRestoreSuccess={(updated) => {
+            setData(updated);
+            setShowBackupModal(false);
+          }}
+        />
+      )}
     </div>
   );
 }
