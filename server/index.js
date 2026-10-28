@@ -810,6 +810,297 @@ app.post('/api/sales', (req, res) => {
   }
 });
 
+// PUT /api/sales/:id - Editar venda existente (itens, preços, descontos, parcelas e data)
+app.put('/api/sales/:id', (req, res) => {
+  try {
+    const saleId = Number(req.params.id);
+    const existingSale = db.prepare('SELECT * FROM sales WHERE id = ?').get(saleId);
+    if (!existingSale) {
+      return res.status(404).json({ error: 'Venda não encontrada.' });
+    }
+
+    const {
+      sale_date = existingSale.sale_date,
+      payment_method = existingSale.payment_method,
+      payment_submethod = existingSale.payment_submethod,
+      installments_count = existingSale.installments_count,
+      interval_days = existingSale.interval_days,
+      first_due_date = existingSale.first_due_date,
+      custom_installments = null,
+      items = null,
+      sale_discount_type = existingSale.sale_discount_type || 'VALUE',
+      sale_discount_input = existingSale.sale_discount_input || 0,
+      notes = existingSale.notes,
+    } = req.body || {};
+
+    db.exec('BEGIN');
+    try {
+      let originalSubtotal = 0;
+      let itemDiscountsTotal = 0;
+      let subtotalAfterItemDiscounts = 0;
+
+      if (Array.isArray(items) && items.length > 0) {
+        // 1. Estornar produtos antigos de volta ao estoque
+        const oldSaleItems = db.prepare('SELECT * FROM sale_items WHERE sale_id = ?').all(saleId);
+        const returnStockStmt = db.prepare(`
+          UPDATE products
+          SET stock_qty = stock_qty + ?
+          WHERE id = ?
+        `);
+        for (const it of oldSaleItems) {
+          if (it.product_id && !it.is_manual_item) {
+            returnStockStmt.run(it.quantity, it.product_id);
+          }
+        }
+
+        // 2. Remover itens antigos
+        db.prepare('DELETE FROM sale_items WHERE sale_id = ?').run(saleId);
+
+        // 3. Preparar novos itens
+        const preparedItems = [];
+        for (const rawItem of items) {
+          const qty = Math.max(1, Number(rawItem.quantity) || 1);
+          const isManual = Boolean(rawItem.is_manual_item || !rawItem.product_id);
+          let productRow = null;
+
+          if (!isManual && rawItem.product_id) {
+            productRow = db.prepare('SELECT * FROM products WHERE id = ?').get(Number(rawItem.product_id));
+          }
+
+          const catalogUnitPrice = roundMoney(
+            rawItem.catalog_unit_price !== undefined && rawItem.catalog_unit_price !== null
+              ? Number(rawItem.catalog_unit_price)
+              : productRow
+              ? productRow.sale_price
+              : Number(rawItem.sold_unit_price || 0)
+          );
+
+          const soldUnitPrice = roundMoney(
+            rawItem.sold_unit_price !== undefined && rawItem.sold_unit_price !== null
+              ? Number(rawItem.sold_unit_price)
+              : catalogUnitPrice
+          );
+
+          const itemDiscountUnit = roundMoney(Math.max(0, catalogUnitPrice - soldUnitPrice));
+          const itemDiscountTotal = roundMoney(itemDiscountUnit * qty);
+          const effectiveOriginalUnit = Math.max(catalogUnitPrice, soldUnitPrice);
+          const lineOriginalTotal = roundMoney(effectiveOriginalUnit * qty);
+          const lineFinalTotal = roundMoney(soldUnitPrice * qty);
+
+          originalSubtotal = roundMoney(originalSubtotal + lineOriginalTotal);
+          itemDiscountsTotal = roundMoney(itemDiscountsTotal + itemDiscountTotal);
+          subtotalAfterItemDiscounts = roundMoney(subtotalAfterItemDiscounts + lineFinalTotal);
+
+          preparedItems.push({
+            product_id: productRow ? productRow.id : null,
+            product_sku_snapshot: productRow ? productRow.sku : (rawItem.product_sku_snapshot || 'MANUAL'),
+            product_name: String(rawItem.product_name || (productRow ? productRow.name : 'Item Variado')).trim(),
+            is_manual_item: isManual ? 1 : 0,
+            quantity: qty,
+            catalog_unit_price: effectiveOriginalUnit,
+            sold_unit_price: soldUnitPrice,
+            item_discount_unit: itemDiscountUnit,
+            item_discount_total: itemDiscountTotal,
+            line_original_total: lineOriginalTotal,
+            line_final_total: lineFinalTotal,
+          });
+        }
+
+        // Inserir novos itens e abater estoque
+        const insertItemStmt = db.prepare(`
+          INSERT INTO sale_items (
+            sale_id, product_id, product_sku_snapshot, product_name, is_manual_item,
+            quantity, catalog_unit_price, sold_unit_price, item_discount_unit, item_discount_total,
+            line_original_total, line_final_total
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        const deductStockStmt = db.prepare(`
+          UPDATE products
+          SET stock_qty = CASE WHEN stock_qty - ? < 0 THEN 0 ELSE stock_qty - ? END
+          WHERE id = ?
+        `);
+
+        for (const it of preparedItems) {
+          insertItemStmt.run(
+            saleId,
+            it.product_id,
+            it.product_sku_snapshot,
+            it.product_name,
+            it.is_manual_item,
+            it.quantity,
+            it.catalog_unit_price,
+            it.sold_unit_price,
+            it.item_discount_unit,
+            it.item_discount_total,
+            it.line_original_total,
+            it.line_final_total
+          );
+
+          if (it.product_id && !it.is_manual_item) {
+            deductStockStmt.run(it.quantity, it.quantity, it.product_id);
+          }
+        }
+      } else {
+        originalSubtotal = existingSale.original_subtotal;
+        itemDiscountsTotal = existingSale.item_discounts_total;
+        subtotalAfterItemDiscounts = roundMoney(originalSubtotal - itemDiscountsTotal);
+      }
+
+      // Desconto a nível de venda
+      const discountInputNum = Math.max(0, Number(sale_discount_input) || 0);
+      let saleDiscountAmount = 0;
+      if (sale_discount_type === 'PERCENT') {
+        saleDiscountAmount = roundMoney(subtotalAfterItemDiscounts * (Math.min(100, discountInputNum) / 100));
+      } else {
+        saleDiscountAmount = roundMoney(Math.min(subtotalAfterItemDiscounts, discountInputNum));
+      }
+
+      const totalDiscountAmount = roundMoney(itemDiscountsTotal + saleDiscountAmount);
+      const finalTotal = roundMoney(Math.max(0, originalSubtotal - totalDiscountAmount));
+
+      // Gerenciar Parcelas e Pagamentos
+      const existingPayments = db.prepare('SELECT * FROM payments WHERE sale_id = ?').all(saleId);
+      const totalPaidAlready = roundMoney(existingPayments.reduce((acc, p) => acc + Number(p.amount || 0), 0));
+
+      const numInstallments = Math.max(1, Number(installments_count) || 1);
+      const stepDays = Math.max(1, Number(interval_days) || 30);
+      const startDueDate = first_due_date || sale_date || existingSale.first_due_date;
+
+      const insertInstStmt = db.prepare(`
+        INSERT INTO installments (
+          sale_id, client_id, installment_number, total_installments, due_date,
+          amount, paid_amount, remaining_amount, status, paid_at, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      if (Array.isArray(custom_installments) && custom_installments.length > 0) {
+        db.prepare('DELETE FROM installments WHERE sale_id = ?').run(saleId);
+        let remPayDistribute = totalPaidAlready;
+
+        custom_installments.forEach((ci, idx) => {
+          const instAmount = roundMoney(Number(ci.amount) || 0);
+          const paidOnThis = roundMoney(Math.min(instAmount, Math.max(0, remPayDistribute)));
+          remPayDistribute = roundMoney(remPayDistribute - paidOnThis);
+          const remOnThis = roundMoney(instAmount - paidOnThis);
+          const instStatus = remOnThis <= 0.009 ? 'PAGO' : paidOnThis > 0.009 ? 'PARCIAL' : 'PENDENTE';
+
+          insertInstStmt.run(
+            saleId,
+            existingSale.client_id,
+            idx + 1,
+            custom_installments.length,
+            ci.due_date || addDaysToDateStr(startDueDate, idx * stepDays),
+            instAmount,
+            paidOnThis,
+            remOnThis,
+            instStatus,
+            instStatus === 'PAGO' ? sale_date : null,
+            ci.notes || ''
+          );
+        });
+      } else if (existingPayments.length === 0) {
+        // Sem pagamentos registrados ainda: regenerar parcelas com o novo finalTotal
+        db.prepare('DELETE FROM installments WHERE sale_id = ?').run(saleId);
+        const baseInstallment = Math.floor((finalTotal / numInstallments) * 100) / 100;
+        let accumulated = 0;
+
+        for (let i = 1; i <= numInstallments; i++) {
+          const isLast = i === numInstallments;
+          const amount = isLast ? roundMoney(finalTotal - accumulated) : roundMoney(baseInstallment);
+          accumulated = roundMoney(accumulated + amount);
+          const dueDate = i === 1 ? startDueDate : addDaysToDateStr(startDueDate, (i - 1) * stepDays);
+
+          insertInstStmt.run(
+            saleId,
+            existingSale.client_id,
+            i,
+            numInstallments,
+            dueDate,
+            amount,
+            0,
+            amount,
+            'PENDENTE',
+            null,
+            ''
+          );
+        }
+      } else {
+        // Pagamentos já existem: redistribuir saldo em aberto nas parcelas pendentes
+        const currentInsts = db.prepare('SELECT * FROM installments WHERE sale_id = ? ORDER BY installment_number ASC').all(saleId);
+        const unpaidInsts = currentInsts.filter(i => i.status !== 'PAGO');
+        const remainingToDistribute = roundMoney(Math.max(0, finalTotal - totalPaidAlready));
+
+        if (unpaidInsts.length > 0) {
+          const basePerUnpaid = Math.floor((remainingToDistribute / unpaidInsts.length) * 100) / 100;
+          let accUnpaid = 0;
+          for (let i = 0; i < unpaidInsts.length; i++) {
+            const isLast = i === unpaidInsts.length - 1;
+            const targetAmount = isLast ? roundMoney(remainingToDistribute - accUnpaid) : roundMoney(basePerUnpaid);
+            accUnpaid = roundMoney(accUnpaid + targetAmount);
+            const remainingAmt = roundMoney(Math.max(0, targetAmount - (unpaidInsts[i].paid_amount || 0)));
+            const status = remainingAmt <= 0.009 ? 'PAGO' : (unpaidInsts[i].paid_amount > 0 ? 'PARCIAL' : 'PENDENTE');
+
+            db.prepare(`
+              UPDATE installments
+              SET amount = ?, remaining_amount = ?, status = ?
+              WHERE id = ?
+            `).run(targetAmount, remainingAmt, status, unpaidInsts[i].id);
+          }
+        }
+      }
+
+      // Atualizar a venda
+      db.prepare(`
+        UPDATE sales SET
+          sale_date = ?,
+          payment_method = ?,
+          payment_submethod = ?,
+          installments_count = ?,
+          interval_days = ?,
+          first_due_date = ?,
+          original_subtotal = ?,
+          item_discounts_total = ?,
+          sale_discount_type = ?,
+          sale_discount_input = ?,
+          sale_discount_amount = ?,
+          total_discount_amount = ?,
+          final_total = ?,
+          notes = ?
+        WHERE id = ?
+      `).run(
+        sale_date,
+        payment_method,
+        payment_submethod,
+        numInstallments,
+        stepDays,
+        startDueDate,
+        originalSubtotal,
+        itemDiscountsTotal,
+        sale_discount_type,
+        discountInputNum,
+        saleDiscountAmount,
+        totalDiscountAmount,
+        finalTotal,
+        String(notes || '').trim(),
+        saleId
+      );
+
+      // Recalcular totais financeiros e status da venda
+      recalculateSaleFinancials(saleId);
+
+      db.exec('COMMIT');
+      res.json(getFullDataPayload());
+    } catch (innerErr) {
+      db.exec('ROLLBACK');
+      throw innerErr;
+    }
+  } catch (err) {
+    console.error('Error updating sale:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // PAYMENTS & INSTALLMENT RECEIPTS (5. Controle de Recebimentos)
 // Supports paying a specific installment (full or partial) OR paying an arbitrary amount towards a client's debt / sale
 app.post('/api/payments', (req, res) => {

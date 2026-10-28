@@ -441,6 +441,7 @@ export default function App() {
         {activeTab === 'clients' && (
           <ClientsLedgerView
             clients={data.clients}
+            products={data.products}
             today={data.today}
             onRefreshData={fetchBootstrap}
             onStartSaleForClient={handleStartSaleForClient}

@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
-import { Users, Plus, Search, Edit3, Trash2 } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Users, Plus, Search, Edit3, Trash2, Package } from 'lucide-react';
 import { formatCurrency, formatDateBR, getInstallmentDueInfo } from '../utils';
 import SaleReceiptModal from './SaleReceiptModal';
 import InstallmentReminderModal from './InstallmentReminderModal';
+import EditSaleModal from './EditSaleModal';
 
 function WhatsAppIcon({ className = 'w-4 h-4' }) {
   return (
@@ -22,6 +23,7 @@ function getWhatsAppUrl(phone) {
 
 export default function ClientsLedgerView({
   clients = [],
+  products = [],
   today = '',
   onRefreshData,
   onStartSaleForClient,
@@ -45,9 +47,12 @@ export default function ClientsLedgerView({
   const [payType, setPayType] = useState('PIX');
   const [savingPay, setSavingPay] = useState(false);
 
-  // Reminder & Receipt Modals
+  // Reminder, Receipt & Edit Sale Modals
   const [reminderInst, setReminderInst] = useState(null);
   const [viewReceiptSale, setViewReceiptSale] = useState(null);
+  const [editingSale, setEditingSale] = useState(null);
+  const [deletingSaleId, setDeletingSaleId] = useState(null);
+  const [itemSearch, setItemSearch] = useState('');
 
   const selectedClient =
     clients.find((c) => c.id === Number(selectedClientId)) || clients[0] || null;
@@ -145,6 +150,75 @@ export default function ClientsLedgerView({
       setSavingPay(false);
     }
   };
+
+  const handleDeleteSale = async (sale) => {
+    if (
+      !window.confirm(
+        `Tem certeza que deseja apagar a venda ${sale.sale_code}? Os produtos voltarão ao estoque e as parcelas pendentes serão excluídas.`
+      )
+    ) {
+      return;
+    }
+    setDeletingSaleId(sale.id);
+    try {
+      const res = await fetch(`/api/sales/${sale.id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Erro ao excluir venda.');
+      }
+      if (onRefreshData) await onRefreshData(data);
+    } catch (err) {
+      alert(err.message || 'Erro ao excluir venda.');
+    } finally {
+      setDeletingSaleId(null);
+    }
+  };
+
+  // Consolidar todos os itens comprados de todos os pedidos da cliente
+  // Ordenado do mais recente em cima para o mais antigo embaixo (antigo de baixo para cima)
+  const allClientItems = useMemo(() => {
+    if (!selectedClient?.sales_history) return [];
+    const list = [];
+    for (const sale of selectedClient.sales_history) {
+      if (Array.isArray(sale.items)) {
+        for (const it of sale.items) {
+          list.push({
+            ...it,
+            sale_id: sale.id,
+            sale_code: sale.sale_code,
+            sale_date: sale.sale_date,
+            payment_method: sale.payment_method,
+            sale_status: sale.status,
+          });
+        }
+      }
+    }
+    return list.sort((a, b) => {
+      if (b.sale_date !== a.sale_date) {
+        return b.sale_date.localeCompare(a.sale_date);
+      }
+      return (b.sale_id || b.id || 0) - (a.sale_id || a.id || 0);
+    });
+  }, [selectedClient?.sales_history]);
+
+  const filteredClientItems = useMemo(() => {
+    if (!itemSearch.trim()) return allClientItems;
+    const q = itemSearch.toLowerCase();
+    return allClientItems.filter(
+      (it) =>
+        (it.product_name || '').toLowerCase().includes(q) ||
+        (it.sale_code || '').toLowerCase().includes(q) ||
+        (it.product_sku_snapshot || '').toLowerCase().includes(q)
+    );
+  }, [allClientItems, itemSearch]);
+
+  const totalPiecesCount = useMemo(() => {
+    return allClientItems.reduce((acc, it) => acc + (Number(it.quantity) || 0), 0);
+  }, [allClientItems]);
+
+  const totalPiecesAmount = useMemo(() => {
+    return allClientItems.reduce((acc, it) => acc + (Number(it.line_final_total) || 0), 0);
+  }, [allClientItems]);
 
   return (
     <div className="space-y-4">
@@ -406,29 +480,146 @@ export default function ClientsLedgerView({
                 </span>
 
                 <div className="space-y-2">
-                  {selectedClient.sales_history?.map((s) => (
-                    <div
-                      key={s.id}
-                      className="p-2.5 rounded-xl border border-app-border flex justify-between items-center text-xs text-app-text"
-                    >
-                      <div>
-                        <span className="font-semibold text-app-text mr-2">{s.sale_code}</span>
-                        <span className="text-app-muted">{formatDateBR(s.sale_date)}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold">{formatCurrency(s.final_total)}</span>
-                        <button
-                          onClick={() => setViewReceiptSale(s)}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border border-app-border hover:bg-app-input text-[11px] font-medium text-app-text cursor-pointer transition"
-                          title="Ver comprovante e enviar no WhatsApp"
-                        >
-                          <WhatsAppIcon className="w-3 h-3 text-emerald-500 fill-current" />
-                          <span>Comprovante</span>
-                        </button>
-                      </div>
+                  {selectedClient.sales_history?.length === 0 ? (
+                    <div className="p-3 text-center text-xs text-app-muted">
+                      Nenhuma venda registrada para este cliente.
                     </div>
-                  ))}
+                  ) : (
+                    selectedClient.sales_history?.map((s) => (
+                      <div
+                        key={s.id}
+                        className="p-2.5 rounded-xl border border-app-border flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 text-xs text-app-text"
+                      >
+                        <div>
+                          <span className="font-semibold text-app-text mr-2">{s.sale_code}</span>
+                          <span className="text-app-muted">{formatDateBR(s.sale_date)}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-semibold mr-1">{formatCurrency(s.final_total)}</span>
+
+                          <button
+                            onClick={() => setViewReceiptSale(s)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-app-border hover:bg-app-input text-[11px] font-medium text-app-text cursor-pointer transition"
+                            title="Ver comprovante e enviar no WhatsApp"
+                          >
+                            <WhatsAppIcon className="w-3 h-3 text-emerald-500 fill-current" />
+                            <span>Comprovante</span>
+                          </button>
+
+                          <button
+                            onClick={() => setEditingSale(s)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-app-border hover:bg-app-input text-[11px] font-medium text-app-text cursor-pointer transition"
+                            title="Editar esta venda (itens, quantidades, valores e parcelas)"
+                          >
+                            <Edit3 className="w-3 h-3 text-app-muted" />
+                            <span>Editar</span>
+                          </button>
+
+                          <button
+                            onClick={() => handleDeleteSale(s)}
+                            disabled={deletingSaleId === s.id}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 text-[11px] font-medium cursor-pointer transition disabled:opacity-50"
+                            title="Apagar esta venda e devolver peças ao estoque"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>{deletingSaleId === s.id ? 'Apagando...' : 'Apagar'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
+              </div>
+
+              {/* Todas as Peças Compradas (Extrato Geral de Peças Consolidado) */}
+              <div className="bg-app-card rounded-2xl p-4 border border-app-border shadow-xs space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-app-border pb-2.5">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Package className="w-4 h-4 text-app-text" />
+                      <span className="text-xs font-semibold text-app-text">
+                        Todas as Peças Compradas ({allClientItems.length})
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-app-muted mt-0.5">
+                      Extrato consolidado de pedidos (mais recentes no topo, antigos abaixo)
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs flex-wrap">
+                    <span className="px-2 py-0.5 rounded-lg bg-app-input border border-app-border text-app-text text-[11px]">
+                      <strong>{totalPiecesCount}</strong> {totalPiecesCount === 1 ? 'peça' : 'peças'}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold border border-emerald-500/20 text-[11px]">
+                      Total: {formatCurrency(totalPiecesAmount)}
+                    </span>
+                  </div>
+                </div>
+
+                {allClientItems.length > 3 && (
+                  <div className="relative">
+                    <Search className="w-3 h-3 absolute left-2.5 top-1/2 -translate-y-1/2 text-app-muted" />
+                    <input
+                      type="text"
+                      placeholder="Filtrar peça comprada por esta cliente..."
+                      value={itemSearch}
+                      onChange={(e) => setItemSearch(e.target.value)}
+                      className="w-full bg-app-input border border-app-border rounded-xl pl-7 pr-3 py-1 text-xs text-app-text outline-none focus:border-stone-400"
+                    />
+                  </div>
+                )}
+
+                {filteredClientItems.length === 0 ? (
+                  <div className="p-4 text-center text-xs text-app-muted">
+                    Nenhuma peça encontrada no histórico.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs text-app-text">
+                      <thead>
+                        <tr className="border-b border-app-border text-[11px] text-app-muted font-medium">
+                          <th className="pb-1.5 font-medium">Data</th>
+                          <th className="pb-1.5 font-medium">Pedido</th>
+                          <th className="pb-1.5 font-medium">Peça / Produto</th>
+                          <th className="pb-1.5 font-medium text-center">Qtd</th>
+                          <th className="pb-1.5 font-medium text-right">Unitário</th>
+                          <th className="pb-1.5 font-medium text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-app-border/50">
+                        {filteredClientItems.map((it, idx) => (
+                          <tr key={`${it.sale_id}-${it.id || idx}`} className="hover:bg-app-input/40 transition">
+                            <td className="py-2 text-[11px] text-app-muted whitespace-nowrap">
+                              {formatDateBR(it.sale_date)}
+                            </td>
+                            <td className="py-2 font-medium whitespace-nowrap">
+                              <span className="px-1.5 py-0.5 rounded bg-app-input border border-app-border text-[10px]">
+                                {it.sale_code}
+                              </span>
+                            </td>
+                            <td className="py-2 font-medium">
+                              <div className="flex flex-col">
+                                <span>{it.product_name}</span>
+                                {it.product_sku_snapshot && it.product_sku_snapshot !== 'MANUAL' && (
+                                  <span className="text-[10px] text-app-muted">SKU: {it.product_sku_snapshot}</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-2 text-center font-semibold text-[11px]">
+                              {it.quantity}x
+                            </td>
+                            <td className="py-2 text-right text-app-muted text-[11px]">
+                              {formatCurrency(it.sold_unit_price)}
+                            </td>
+                            <td className="py-2 text-right font-semibold text-[11px]">
+                              {formatCurrency(it.line_final_total)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </>
           ) : (
@@ -584,6 +775,18 @@ export default function ClientsLedgerView({
           sale={viewReceiptSale}
           client={selectedClient}
           onClose={() => setViewReceiptSale(null)}
+        />
+      )}
+
+      {/* Modal Editar Venda */}
+      {editingSale && (
+        <EditSaleModal
+          sale={editingSale}
+          products={products}
+          onClose={() => setEditingSale(null)}
+          onSaveSuccess={(data) => {
+            if (onRefreshData) onRefreshData(data);
+          }}
         />
       )}
     </div>
