@@ -53,7 +53,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [preselectedClientId, setPreselectedClientId] = useState(null);
   const [showBackupModal, setShowBackupModal] = useState(false);
-  const [restoreBanner, setRestoreBanner] = useState(null);
 
   const [data, setData] = useState({
     today: new Date().toISOString().slice(0, 10),
@@ -66,12 +65,21 @@ export default function App() {
   });
   const [loading, setLoading] = useState(true);
 
+  // Auto-salvar no navegador 100% automático sempre que houver dados
+  useEffect(() => {
+    if (data && (data.clients?.length > 0 || data.products?.length > 0 || data.sales?.length > 0)) {
+      try {
+        localStorage.setItem('marias_imports_auto_backup', JSON.stringify(data));
+      } catch (e) {}
+    }
+  }, [data]);
+
   const fetchBootstrap = useCallback(async (directPayload = null) => {
     if (directPayload && directPayload.products && directPayload.clients) {
       setData(directPayload);
       try {
-        if (directPayload.clients.length > 0 || directPayload.products.length > 0) {
-          localStorage.setItem('marias_imports_data_backup', JSON.stringify(directPayload));
+        if (directPayload.clients.length > 0 || directPayload.products.length > 0 || directPayload.sales?.length > 0) {
+          localStorage.setItem('marias_imports_auto_backup', JSON.stringify(directPayload));
         }
       } catch (e) {}
       setLoading(false);
@@ -81,25 +89,51 @@ export default function App() {
       const res = await fetch('/api/bootstrap');
       if (res.ok) {
         const json = await res.json();
-        setData(json);
+        const serverHasData =
+          (json.clients && json.clients.length > 0) ||
+          (json.products && json.products.length > 0) ||
+          (json.sales && json.sales.length > 0);
 
-        // Se o servidor voltou zerado mas temos cópia no navegador:
-        if ((!json.clients || json.clients.length === 0) && (!json.products || json.products.length === 0)) {
+        // Se o servidor reiniciou zerado, restaura AUTOMATICAMENTE sem a usuária ter que clicar nada!
+        if (!serverHasData) {
           try {
-            const savedStr = localStorage.getItem('marias_imports_data_backup');
+            const savedStr = localStorage.getItem('marias_imports_auto_backup');
             if (savedStr) {
               const saved = JSON.parse(savedStr);
-              if (saved && (saved.clients?.length > 0 || saved.products?.length > 0)) {
-                setRestoreBanner(saved);
+              if (saved && (saved.clients?.length > 0 || saved.products?.length > 0 || saved.sales?.length > 0)) {
+                const restoreRes = await fetch('/api/backup/restore', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(saved),
+                });
+                if (restoreRes.ok) {
+                  const restored = await restoreRes.json();
+                  setData(restored);
+                  setLoading(false);
+                  return;
+                }
               }
             }
-          } catch (e) {}
-        } else if (json.clients?.length > 0 || json.products?.length > 0) {
-          localStorage.setItem('marias_imports_data_backup', JSON.stringify(json));
+          } catch (e) {
+            console.error('Erro na sincronização automática:', e);
+          }
+        }
+
+        setData(json);
+        if (serverHasData) {
+          localStorage.setItem('marias_imports_auto_backup', JSON.stringify(json));
         }
       }
     } catch (err) {
       console.error(err);
+      // Se estiver offline ou servidor acordando, usa os dados do navegador automaticamente
+      try {
+        const savedStr = localStorage.getItem('marias_imports_auto_backup');
+        if (savedStr) {
+          const saved = JSON.parse(savedStr);
+          if (saved) setData(saved);
+        }
+      } catch (e) {}
     } finally {
       setLoading(false);
     }
@@ -294,49 +328,6 @@ export default function App() {
 
       {/* Conteúdo Central */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6">
-        {restoreBanner && (
-          <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs mb-5">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="w-5 h-5 shrink-0 text-amber-500" />
-              <span>
-                <strong>Cópia de Segurança Encontrada:</strong> Temos uma cópia salva no seu navegador com{' '}
-                <strong>{restoreBanner.clients?.length || 0} clientes</strong> e{' '}
-                <strong>{restoreBanner.products?.length || 0} produtos</strong>.
-              </span>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    const res = await fetch('/api/backup/restore', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(restoreBanner),
-                    });
-                    if (res.ok) {
-                      const updated = await res.json();
-                      setData(updated);
-                      setRestoreBanner(null);
-                    }
-                  } catch (e) {
-                    alert('Erro ao restaurar backup.');
-                  }
-                }}
-                className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold transition cursor-pointer shadow-xs"
-              >
-                Restaurar Agora
-              </button>
-              <button
-                type="button"
-                onClick={() => setRestoreBanner(null)}
-                className="px-2 py-1.5 text-app-muted hover:text-app-text cursor-pointer"
-              >
-                Dispensar
-              </button>
-            </div>
-          </div>
-        )}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
             {/* Header de Ação Direta */}
