@@ -8,12 +8,60 @@ const {
   roundMoney,
   recalculateSaleFinancials,
 } = require('./db');
+const {
+  initNeonTable,
+  saveToNeon,
+  loadFromNeon,
+  restorePayloadToSqlite,
+} = require('./neon_sync');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
 
 app.use(cors());
 app.use(express.json());
+
+function getRawDatabaseBackup() {
+  return {
+    clients: db.prepare('SELECT * FROM clients').all(),
+    products: db.prepare('SELECT * FROM products').all(),
+    sales: db.prepare('SELECT * FROM sales').all(),
+    sale_items: db.prepare('SELECT * FROM sale_items').all(),
+    installments: db.prepare('SELECT * FROM installments').all(),
+    payments: db.prepare('SELECT * FROM payments').all(),
+    expenses: db.prepare('SELECT * FROM expenses').all(),
+    settings: db.prepare('SELECT * FROM settings').all(),
+  };
+}
+
+let syncTimeout = null;
+function triggerNeonSync() {
+  if (syncTimeout) clearTimeout(syncTimeout);
+  syncTimeout = setTimeout(() => {
+    try {
+      const payload = getRawDatabaseBackup();
+      saveToNeon(payload).catch((err) => {
+        console.error('[Neon AutoSync Async Error]:', err.message);
+      });
+    } catch (e) {
+      console.error('[Neon AutoSync Capture Error]:', e.message);
+    }
+  }, 1000);
+}
+
+// Auto-sync middleware: every time data is added, changed or removed, sync to Neon cloud
+app.use((req, res, next) => {
+  if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
+    if (req.path !== '/api/login') {
+      res.on('finish', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          triggerNeonSync();
+        }
+      });
+    }
+  }
+  next();
+});
 
 // Ensure all tables and columns exist on startup (auto-migration for cloud deploy)
 db.exec(`
@@ -1590,6 +1638,29 @@ app.get('/{*splat}', (req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[Maria's Imports API] Servidor rodando na porta ${PORT}`);
-});
+async function startServer() {
+  try {
+    await initNeonTable();
+    const cloudSnapshot = await loadFromNeon();
+    const localClientsCount = db.prepare('SELECT count(*) as c FROM clients').get()?.c || 0;
+    const localSalesCount = db.prepare('SELECT count(*) as s FROM sales').get()?.s || 0;
+
+    if (cloudSnapshot && (cloudSnapshot.clients?.length > 0 || cloudSnapshot.sales?.length > 0)) {
+      console.log(
+        `[Neon Sync] Hidratando SQLite a partir da nuvem (${cloudSnapshot.clients?.length || 0} clientes, ${cloudSnapshot.sales?.length || 0} vendas)...`
+      );
+      restorePayloadToSqlite(db, cloudSnapshot);
+    } else if (localClientsCount > 0 || localSalesCount > 0) {
+      console.log(`[Neon Sync] Enviando dados locais para a nuvem...`);
+      await saveToNeon(getRawDatabaseBackup());
+    }
+  } catch (err) {
+    console.error('[Neon Startup Sync Error]:', err.message);
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[Maria's Imports API] Servidor rodando na porta ${PORT}`);
+  });
+}
+
+startServer();
